@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 import re
+import os
+import tong_hop_du_lieu
 
 st.set_page_config(page_title="Hệ thống giám sát chất lượng không khí", layout="wide", page_icon="🌤️")
 
@@ -183,16 +185,12 @@ def hien_thi_dashboard(df_filtered, chat_duoc_chon, max_val_hientai, hien_thi_no
 
         st.markdown("---")
 
-        # Biểu đồ cột (ĐÃ ĐƯỢC SỬA LỖI TẠI ĐÂY)
+        # Biểu đồ cột
         st.subheader(f"📈 BIỂU ĐỒ CỘT ({chat_duoc_chon})")
         
-        # Gom nhóm theo tên trạm và tính trung bình để tránh lỗi trùng lặp dữ liệu
         df_chart = df_plot.groupby("Tên_trạm", as_index=False)["Chiso_Value"].mean()
-        
-        # Sắp xếp từ cao xuống thấp và lấy Top 30 để biểu đồ không bị quá tải
         df_chart = df_chart.sort_values(by="Chiso_Value", ascending=False).head(30)
         
-        # Vẽ biểu đồ với thông số x, y rõ ràng
         if not df_chart.empty:
             st.bar_chart(
                 data=df_chart, 
@@ -219,11 +217,31 @@ menu_trang = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("QUẢN LÝ DỮ LIỆU")
-uploaded_file = st.sidebar.file_uploader("Tải tệp dữ liệu CSV lên", type="csv")
 
+# 1. NÚT CẬP NHẬT DỮ LIỆU TỰ ĐỘNG
+if st.sidebar.button("🔄 Lấy dữ liệu API & Vệ tinh mới nhất", use_container_width=True):
+    with st.spinner("Hệ thống đang tổng hợp dữ liệu (Có thể mất 1-2 phút)..."):
+        try:
+            tong_hop_du_lieu.main()
+            st.sidebar.success("✅ Đã cập nhật dữ liệu mới nhất thành công!")
+        except Exception as e:
+            st.sidebar.error(f"❌ Có lỗi xảy ra khi cập nhật: {e}")
+
+st.sidebar.markdown("---")
+
+# 2. XỬ LÝ ĐỌC FILE DỮ LIỆU (Ưu tiên File Upload -> File Mặc định)
+FILE_MAC_DINH = "tram_quantrac_toan_vung.csv"
+uploaded_file = st.sidebar.file_uploader("Hoặc tải CSV tùy chỉnh (Không bắt buộc)", type="csv")
+
+df = None
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    # Chuẩn hóa tên cột ngay sau khi đọc
+elif os.path.exists(FILE_MAC_DINH):
+    df = pd.read_csv(FILE_MAC_DINH)
+    st.sidebar.caption(f"Đang hiển thị dữ liệu hệ thống ({len(df)} điểm đo).")
+
+# 3. NẾU CÓ DỮ LIỆU THÌ HIỂN THỊ DASHBOARD
+if df is not None:
     df = normalize_columns(df)
 
     st.sidebar.subheader("1. Lọc Nguồn Dữ Liệu")
@@ -237,13 +255,11 @@ if uploaded_file is not None:
 
     if len(chat_hien_co) > 0:
         chat_duoc_chon = st.sidebar.selectbox("Lựa chọn chất ô nhiễm để hiển thị:", chat_hien_co)
-        # Loại bỏ các dòng thiếu tọa độ hoặc giá trị chất được chọn
         df = df.dropna(subset=['Vĩ_độ', 'Kinh_độ', chat_duoc_chon])
-        # Ép kiểu số cho cột được chọn
         df[chat_duoc_chon] = pd.to_numeric(df[chat_duoc_chon], errors='coerce').fillna(0)
         max_val_hientai = df[chat_duoc_chon].max() if not df.empty else 1
     else:
-        st.error("Không tìm thấy cột chất ô nhiễm nào (PM2.5, PM10, CO, NO2, SO2, O3) trong file dữ liệu. Hãy kiểm tra lại tên cột.")
+        st.error("Không tìm thấy cột chất ô nhiễm nào. Hãy kiểm tra lại tên cột.")
         st.stop()
 
     st.sidebar.subheader("3. Công cụ Bản đồ")
@@ -261,9 +277,6 @@ if uploaded_file is not None:
 
         if 'Tỉnh/Thành phố' in df.columns:
             ds_tinh = df['Tỉnh/Thành phố'].dropna().unique()
-            if len(ds_tinh) == 1:
-                st.warning(f"⚠️ **Nhắc nhở dữ liệu:** Tệp CSV của bạn hiện chỉ có một giá trị là `{ds_tinh[0]}` trong cột 'Tỉnh/Thành phố'. Để có thể cắt lát từng tỉnh, bạn hãy mở tệp CSV bằng Excel, điền tên các tỉnh thành (Hồ Chí Minh, Vũng Tàu,...) tương ứng vào cột này rồi tải lên lại nhé!")
-
             tinh_selected = st.selectbox("🎯 Chọn Khu Vực / Tỉnh Thành cần cắt lát:", ds_tinh)
             df_filtered = df[df['Tỉnh/Thành phố'] == tinh_selected]
             st.success(f"Đang phân tích chuyên sâu khu vực: **{tinh_selected}**")
@@ -273,4 +286,4 @@ if uploaded_file is not None:
             st.error("Rất tiếc! Tệp dữ liệu CSV của bạn không có cột 'Tỉnh/Thành phố'.")
 
 else:
-    st.info("👋 Xin chào! Hãy tải tệp CSV của bạn lên ở Menu bên trái để bắt đầu.")
+    st.info("👋 Xin chào! Hệ thống chưa có dữ liệu. Hãy bấm nút 'Lấy dữ liệu API & Vệ tinh mới nhất' ở menu bên trái để bắt đầu.")
